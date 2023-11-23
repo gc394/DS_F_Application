@@ -1,0 +1,109 @@
+---
+title: "F Application Report"
+author: "Greg Cooke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+```
+
+
+```{r libraries, include=FALSE}
+
+library(openxlsx)
+library(tibble)
+library(magrittr)
+library(tidyr)
+library(purrr)
+library(knitr)
+library(kableExtra)
+
+```
+
+In this report I will look to highlight the firms that should be focused on by our supervisors using key metrics that I will explain throughout the report. I will keep all my code in the report for audit and reusability purposes as conclusions may change as new data arrives. I will focus this piece on the three main characteristics stated: Firm Size, Changing Business Profile and Outliers.
+
+## Data Loading and Wrangling
+
+I have used a combination of *openxlsx* and *tidyverse* packages to render the xlsx into a R-readable output.
+
+```{r ETL}
+
+# create workbook object
+wb = openxlsx::loadWorkbook(file = 'DataScientist_009749_Dataset.xlsx')
+
+# both sheets are formatted the same way so we want to
+# build a function to stop code repetition!
+wrangle_dataframe = function(df){
+  
+  # take the date vector, remove the first item which is NA (missing firm) to re-add in
+  dates_vec = unname(df[1, 2:ncol(df)]) %>% 
+    base::as.character() %>%
+    gsub(pattern = '[A-z]', replacement = '', x = .)
+  
+  output_df = df %>%
+    # pivot the metrics into a column
+    tidyr::pivot_longer(cols = -X1) %>%
+    # removes the first row
+    dplyr::filter(!is.na(X1)) %>%
+    # add in year from the general dates vector created earlier
+    # we need to repeat this for each firm 
+    dplyr::mutate(year = rep(dates_vec, times = length(unique(.$X1))),
+                  value = as.numeric(value)) %>%
+    # rename and make easier for me to read
+    dplyr::select(firm = X1, metric = name, year, value)
+  
+  return(output_df)
+  
+}
+
+# read, wrangle and combine datasets
+df = purrr::map(
+  .x = openxlsx::sheets(wb),
+  .f = function(x){
+    
+    # read data in
+    openxlsx::readWorkbook(
+      xlsxFile = wb, 
+      sheet = x) %>%
+      # wrangle using function defined above
+      wrangle_dataframe()
+    
+  }) %>%
+  # purrr recommends this approach over map_dfr due to edge cases from dplyr::bind_rows()
+  purrr::list_rbind() %>%
+  # just to make it easier to read for me - again.
+  dplyr::arrange(firm, metric, year) %>%
+  # each metric to it's own column
+  tidyr::pivot_wider(
+    names_from = metric, 
+    values_from = value) %>%
+  janitor::clean_names()
+
+knitr::kable(summary(df))  %>%
+  kable_styling("striped", full_width = F) %>% 
+  scroll_box(width = "100%")
+
+```
+
+
+From this summary we can see there is a lot of variance across each of the metrics that I will look to explore.
+
+## Firm Size
+
+To consider firm size I will look at:
+
+* *Total Assets*, as assets represent the resources these firms own to generate revenue from.
+* *Net Written Premium* this is a better indicator than Gross in my opinion as it considers income post reinsurance costs giving a better picture of profit.
+* *Equity*, this represents the amount of money returned to shareholders if the insurer liquidates. This is important as it shows a picture of financial health and stability.
+
+I will consider both the magnitude and consistency of these metrics due to the potential for misreporting or anonymous returns.
+
+
+```{r cars}
+summary(cars)
+```
+
+

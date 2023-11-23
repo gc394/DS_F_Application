@@ -17,7 +17,9 @@ wb = openxlsx::loadWorkbook(file = 'DataScientist_009749_Dataset.xlsx')
 wrangle_dataframe = function(df){
   
   # take the date vector, remove the first item which is NA (missing firm) to re-add in
-  dates_vec = unname(df[1, 2:ncol(df)]) %>% as.character()
+  dates_vec = unname(df[1, 2:ncol(df)]) %>% 
+    base::as.character() %>%
+    gsub(pattern = '[A-z]', replacement = '', x = .)
   
   output_df = df %>%
     # pivot the metrics into a column
@@ -26,9 +28,10 @@ wrangle_dataframe = function(df){
     dplyr::filter(!is.na(X1)) %>%
     # add in year from the general dates vector created earlier
     # we need to repeat this for each firm 
-    dplyr::mutate(year = rep(dates_vec, times = length(unique(.$X1)))) %>%
+    dplyr::mutate(year = rep(dates_vec, times = length(unique(.$X1))),
+                  value = as.numeric(value)) %>%
     # rename and make easier for me to read
-    dplyr::select(firm_name = X1, metric = name, year, value)
+    dplyr::select(firm = X1, metric = name, year, value)
   
   return(output_df)
   
@@ -40,7 +43,7 @@ df = purrr::map(
   .f = function(x){
     
     # read data in
-    openxlsx::readWorkbook(
+    df = openxlsx::readWorkbook(
       xlsxFile = wb, 
       sheet = x) %>%
       # wrangle using function defined above
@@ -49,5 +52,8 @@ df = purrr::map(
   }) %>%
   # purrr recommends this approach over map_dfr due to edge cases from dplyr::bind_rows()
   purrr::list_rbind() %>%
-  # jsut to make it easier to read for me - again.
-  dplyr::arrange(firm_name, metric, year)
+  # just to make it easier to read for me - again.
+  dplyr::arrange(firm, metric, year) %>%
+  tidyr::pivot_wider(
+    names_from = metric, 
+    values_from = value)
