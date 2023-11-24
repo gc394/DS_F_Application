@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-options(scipen = 999)
+options(scipen = 999, dplyr.summarise.inform = F)
 ```
 
 
@@ -20,6 +20,12 @@ library(tidyr)
 library(purrr)
 library(knitr)
 library(kableExtra)
+library(dplyr)
+library(ggplot2)
+library(ggthemes)
+library(glue)
+library(scales)
+library(ggrepel)
 
 ```
 
@@ -27,9 +33,9 @@ In this report I will look to highlight the firms that should be focused on by o
 
 ## Data Loading and Wrangling
 
-I have used a combination of *openxlsx* and *tidyverse* packages to render the xlsx into a R-readable output.
+I have used a combination of *openxlsx* and *tidyverse* packages to render the xlsx into a R-readable output. Below I have produced a summary of all the variables.
 
-```{r ETL}
+```{r ETL, echo = FALSE}
 
 # create workbook object
 wb = openxlsx::loadWorkbook(file = 'DataScientist_009749_Dataset.xlsx')
@@ -55,6 +61,34 @@ wrangle_dataframe = function(df){
     # rename and make easier for me to read
     dplyr::select(firm = X1, metric = name, year, value)
   
+  # due to volatility we want to create descriptive metrics to find biggest, most volatile etc. firms
+  added_metrics_output_df = output_df %>%
+    # we are going to describe the whole time series so just need firm and metric
+    dplyr::group_by(firm, metric) %>%
+    dplyr::summarise(
+      # this are the variables I will use (for now)
+      mean_value = mean(value, na.rm = T),
+      median_value = median(value, na.rm = T),
+      sd_value = sd(value, na.rm = T),
+      mad_value = mad(value, na.rm = T)
+      )
+  
+  # add them back to the original output and then pivot longer
+  # creating 'value type' variable - only value element varies temporarily
+  output_df = output_df %>%
+    dplyr::left_join(
+      added_metrics_output_df,
+      by = c('firm', 'metric')) %>%
+    tidyr::pivot_longer(
+      cols = contains('value'), 
+      names_to = 'value_type'
+    ) %>%
+    dplyr::mutate(
+      # renaming value to time_series_value for ease
+      value_type = case_match(value_type, 
+                              'value' ~ 'time_series_value', 
+                              .default = value_type))
+    
   return(output_df)
   
 }
@@ -75,21 +109,66 @@ df = purrr::map(
   # purrr recommends this approach over map_dfr due to edge cases from dplyr::bind_rows()
   purrr::list_rbind() %>%
   # just to make it easier to read for me - again.
-  dplyr::arrange(firm, metric, year) %>%
+  dplyr::arrange(firm, metric, year, value_type) %>%
   # each metric to it's own column
   tidyr::pivot_wider(
     names_from = metric, 
     values_from = value) %>%
-  janitor::clean_names()
+  # clean names does most of the heavy lifting
+  janitor::clean_names() %>%
+  # final touch ups
+  dplyr::rename(
+    eof_for_scr_m = eo_f_for_scr_m,
+    equity_m = excess_of_assets_over_liabilities_m_equity,
+    gross_bel_m = gross_bel_inc_t_ps_as_whole_pre_tmtp_m,
+    net_bel_m = net_bel_inc_t_ps_as_a_whole_pre_tmtp_m,
+  )
 
+# pretty table output
 knitr::kable(summary(df))  %>%
+  kable_styling("striped", full_width = F) %>% 
+  scroll_box(width = "100%")
+```
+
+From this summary we can see each of the columns are in the correct data type and there is significant variance across the numeric variables. The dataset looks like this now:
+
+```{r, echo = FALSE}
+
+# pretty table output
+knitr::kable(head(df, 5))  %>%
   kable_styling("striped", full_width = F) %>% 
   scroll_box(width = "100%")
 
 ```
 
 
-From this summary we can see there is a lot of variance across each of the metrics that I will look to explore.
+I have set up the datatable so that only *value_type* *time_series_value* varies over time. This makes it straightforward to wrangle to find the top/bottom n firms or most/least varying firms by variable.
+
+
+## Caveats
+
+```{r Missing Firms, eval=FALSE}
+
+pull_unique_firms = function(wb, sheet_n){
+  
+  openxlsx::readWorkbook(
+      xlsxFile = wb, 
+      sheet = openxlsx::sheets(wb)[sheet_n])['X1'] %>%
+    dplyr::pull()
+    
+}
+
+firms_sheet1_vec = pull_unique_firms(wb, 1)
+firms_sheet2_vec = pull_unique_firms(wb, 2)
+  
+length(setdiff(firms_sheet2_vec, firms_sheet1_vec))
+```
+
+
+There are some caveats which will be worth considering with my data-centric approach to resource allocation, these are:
+
+* Data Quality, I can perform some degree of data cleaning and provide a high level of confidence in data quality however this is not perfect.
+* Missing data, we see that 131 more firms (Firm 326 to Firm 456 inclusive) report in the *Underwriting* sheet than in the *General* sheet of the XLSX.
 
 ## Firm Size
 
@@ -99,11 +178,109 @@ To consider firm size I will look at:
 * *Net Written Premium* this is a better indicator than Gross in my opinion as it considers income post reinsurance costs giving a better picture of profit.
 * *Equity*, this represents the amount of money returned to shareholders if the insurer liquidates. This is important as it shows a picture of financial health and stability.
 
-I will consider both the magnitude and consistency of these metrics due to the potential for misreporting or anonymous returns.
+As we want to consider both magnitude and consistency of the variables, I will use the median score to select the highest rated firms and will plot them against the rest.
 
+```{r Total Assets Plot, echo=FALSE}
 
-```{r cars}
-summary(cars)
+plot_metric_by_top_n_type = function(df, metric, type, n){
+  
+  # find biggest median asset firms
+grouped_df = df %>%
+  dplyr::filter(value_type == type) %>%
+  dplyr::select(all_of(c('firm', metric))) %>%
+  dplyr::group_by(firm) %>%
+  dplyr::summarise(m = max(.data[[metric]]))
+
+# find the top 3 firms
+topn_firms = grouped_df %>%
+  dplyr::slice_max(m, n = n) %>%
+  dplyr::pull('firm')
+
+# find the top 20pct of firms
+top20pct_firms = grouped_df %>%
+  dplyr::slice_max(m, prop = -.80) %>%
+  dplyr::pull('firm')
+
+# produce color vectors for the top three firms
+# this gives the colour values of the vector
+cols = c(ggthemes::wsj_pal()(length(topn_firms)), 
+         rep('black', length(unique(df$firm)) - length(topn_firms)))
+
+# by then naming the vector we can set the color
+names(cols) = c(topn_firms, unique(df$firm)[!unique(df$firm) %in% topn_firms])
+
+ylab = case_when
+
+# graph
+ggplot2::ggplot(
+  data = df %>%
+    # helps to read and debug having a smaller dataset
+    dplyr::select(all_of(c('firm', 'year', 'value_type', metric))) %>%
+    # we want to use the time series value as this one changes over time and we only want top 20%
+    # of firms to compare this to
+    dplyr::filter(value_type == 'time_series_value', firm %in% top20pct_firms) %>%
+    dplyr::mutate(
+      alpha = case_when(
+        firm %in% topn_firms ~ 1,
+        .default = 0.9
+        ),
+      # width = case_when(
+      #   firm %in% topn_firms ~ 0.00021,
+      #   .default = 0.0002
+      # ),
+      text = case_when(
+        firm %in% topn_firms & year == '2020' ~ firm,
+        .default = ''
+        )
+    ),
+  mapping = aes(
+    x = year, 
+    y = .data[[metric]], 
+    # linewidth = width,
+    group = firm,
+    alpha = alpha,
+    color = firm,
+    label = text)
+)  +
+  # ggthemes::theme_fivethirtyeight() +
+  geom_line() + 
+  geom_label_repel(aes(label = text),
+                   nudge_x = 1,
+                   na.rm = TRUE) +
+  scale_color_manual(
+    values = cols
+  ) + 
+  scale_y_continuous(
+    labels = scales::label_number(scale_cut = scales::cut_short_scale(),
+                                  accuracy = 1)) + 
+  theme(legend.position = "none") +
+  labs(
+    title = glue::glue('{metric} over time'),
+    subtitle = glue::glue('{n} largest firms by {gsub("_", " ", type)} highlighted compared with the top 20%'),
+    x = 'Year End',
+    y = case_when(
+      grepl(pattern = '_m$', x = metric) ~ 'GBP (M)',
+      grepl(pattern = 'ratio$', x = metric) ~ 'Ratio'
+    ))
+
+}
+
+plot_metric_by_top_n_type(df = df, metric = 'total_assets_m', type = 'median_value', n = 5)
 ```
 
+From this graph we can see there are five firms that are distinctly larger than the rest and I have only considered the top 20% of firms by median value. It is worth highlighting, and I will explore later, the volatility of some of the firms accounts as we can see firm 311 and 210 have large drops in 2020 (YE). 
 
+```{r NWP, echo = FALSE}
+
+plot_metric_by_top_n_type(df = df, metric = 'nwp_m', type = 'median_value', n = 4)
+
+```
+
+Only Firms 210 and 4 show much deviation from the top 20%.
+
+```{r Equity, echo = FALSE}
+
+plot_metric_by_top_n_type(df = df, metric = 'equity_m', type = 'median_value', n = 4)
+
+```
+Firm 4 has appears twice now, firstly for having a significantly larger Net Written Premium and now for Equity. This suggests to us that it is a largely profitable insurance firm with a large equity holding meaning it is in a very healthy financial position. I would suggest this firm is definitely an important player in the market and one to monitor.
