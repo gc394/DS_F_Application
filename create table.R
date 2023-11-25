@@ -13,15 +13,31 @@ tst = df %>%
   dplyr::mutate(
     across(
       .cols = where(is.numeric),
-      # taking the log of the absolute standard deviation to try and normalise large values and
-      # protect weightings
-      .fns = ~ log(abs((.x - mean(.x, na.rm = T)) / mean(.x, na.rm = T))), 
-      .names = '{.col}_sd')
+      # find the absolute sd of each of the variable columns
+      .fns = ~ abs((.x - mean(.x, na.rm = T)) / mean(.x, na.rm = T)), 
+      .names = '{.col}_abs_sd'),
+    # normalise these columns to stop weighting bias
+    across(
+      .cols = ends_with('_abs_sd'),
+      .fns = ~ abs((.x - mean(.x, na.rm = T)) / mean(.x, na.rm = T)), 
+      .names = '{.col}_normalised')
     ) %>% 
   rowwise() %>%
-  dplyr::mutate(size_median_sd = median(nwp_m_sd, equity_m_sd, total_assets_m_sd, scr_m_sd, net_combined_ratio_sd, na.rm= T)) %>%
-  dplyr::arrange(desc(size_median_sd)) %>%
+  # have used select variables to determine size 
+  dplyr::mutate(size_score = mean(c(nwp_m_abs_sd_normalised, net_bel_m_abs_sd_normalised, pure_gross_claims_ratio_abs_sd_normalised), na.rm= T)) %>%
+  dplyr::arrange(desc(size_score)) %>%
   utils::head(10) %>%
-  dplyr::select(firm, nwp_m_sd, equity_m_sd, total_assets_m_sd, scr_m_sd, net_combined_ratio_sd)
+  dplyr::select(firm, size_score, nwp_m_abs_sd_normalised, net_bel_m_abs_sd_normalised, pure_gross_claims_ratio_abs_sd_normalised)
 
-?head
+
+# CORR matrix
+mat = df %>%
+  # take the mean value
+  dplyr::filter(value_type == 'median_value') %>%
+  dplyr::select(-year, -value_type, -firm) %>%
+  # remove duplications from value_types
+  dplyr::distinct() %>%
+  cor(., method = "pearson", use = "complete.obs")
+
+
+
