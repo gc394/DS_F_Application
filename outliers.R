@@ -155,22 +155,25 @@ outliers_df = df %>%
     values_from = 'flag'
   )
 
-filtered_df = anti_join(
+filtered_df = dplyr::anti_join(
   x = df %>%
     filter(value_type == 'time_series_value') %>%
     pivot_longer(cols = -c('firm', 'year', 'value_type')),
   y = outliers_df %>%
     pivot_longer(cols = -c('firm', 'year')) %>%
     filter(value == 'IQR Outlier'),
-  by = c('firm', 'year')
-  ) %>%
+  by = c('firm', 'year', 'name')
+) %>%
   # we are going to describe the whole time series so just need firm and metric
   dplyr::group_by(firm, name) %>%
   dplyr::summarise(
     # this are the variables I will use (for now)
     median_value = median(value, na.rm = T),
     # mad_value = mad(value, na.rm = T)
-  )
+  ) %>% 
+  tidyr::pivot_wider(
+    names_from = name, 
+    values_from = median_value)
   
   
 

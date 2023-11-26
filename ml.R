@@ -22,6 +22,14 @@ pca_recipe <- recipes::recipe(firm ~ ., data = pca_input_df)  %>%
 
 pca_prep = recipes::prep(x = pca_recipe, training = pca_input_df)
 
+tidy(pca_prep, 3) %>%
+  filter(component %in% paste0("PC", 1:2)) %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(value, terms, fill = terms)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~component, nrow = 1) +
+  labs(y = NULL)
+
 # plot this and cluster
 pca_output_df = recipes::bake(object = pca_prep, pca_input_df)
 
@@ -84,9 +92,22 @@ kclusts <-
   mutate(
     kclust = map(k, ~kmeans(pca_points, .x)),
     tidied = map(kclust, tidy),
-    glanced = map(kclust, glance),
-    augmented = map(kclust, augment, points))
-    
+    augmented = map(kclust, augment, pca_points)
+    )
+kclusts %>%
+  unnest(cols = c(tidied)) %>%
+  group_by()
+  select(k, withinss)
+
+
+
+  
+
+
+
+
+
+
 
 
 

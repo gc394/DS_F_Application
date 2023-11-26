@@ -267,7 +267,7 @@ ggplot2::ggplot(
   geom_line() + 
   # creates labels that don't bump into each other
   geom_label_repel(aes(label = text),
-                   nudge_x = 1,
+                   nudge_x = 1, segment.color="black",
                    na.rm = TRUE) +
   # sets colors on for topn firms
   scale_color_manual(
@@ -305,45 +305,118 @@ Only Firms 210 and 4 are considerably larger than the rest of the top 20% of fir
 plot_metric_by_top_n_type(df = df, metric = 'equity_m', type = 'median_value', n = 4)
 
 ```
+
 Firm 4 has appears twice now, firstly for having a significantly larger Net Written Premium and now for Equity. This suggests to us that it is a largely profitable insurance firm with a large equity holding meaning it is in a very healthy financial position. I would suggest this firm is definitely an important player in the market and one to monitor.
 
 ```{r Size Table, echo = FALSE}
 
-# we want to find the top sd firms for all size metrics and make a table for the top 15/10%
-size_table_df = df %>%
+# modifed z-score
+median_ad_df = df %>%
   # take the mean value
-  dplyr::filter(value_type == 'median_value', firm %in% glue('Firm {1:325}')) %>%
-  dplyr::select(-year, -value_type) %>%
+  dplyr::filter(value_type == 'time_series_value') %>%
+  dplyr::select(-value_type) %>%
   # remove duplications from value_types
   dplyr::distinct() %>%
+  dplyr::group_by(year) %>%
   # find standard deviation for each firm 
-  dplyr::mutate(
+  dplyr::summarise(
     across(
       .cols = where(is.numeric),
       # find the absolute sd of each of the variable columns
-      .fns = ~ abs(sqrt((.x - mean(.x, na.rm = T))^2 / length(.x))), 
-      .names = '{.col}_abs_sd'),
-    # normalise these columns to stop weighting bias
+      .fns = ~ stats::mad(.x, na.rm = T)
+      )) %>%
+  pivot_longer(
+    cols = -year, 
+    names_to = 'metric', 
+    values_to = 'year_median_ad')
+
+median_df = df %>%
+  # take the mean value
+  dplyr::filter(value_type == 'time_series_value') %>%
+  dplyr::select(-value_type) %>%
+  # remove duplications from value_types
+  dplyr::distinct() %>%
+  dplyr::group_by(year) %>%
+  # find standard deviation for each firm 
+  dplyr::summarise(
     across(
-      .cols = ends_with('_abs_sd'),
-      .fns = ~ abs(sqrt((.x - mean(.x, na.rm = T))^2 / length(.x))), 
-      .names = '{.col}_normalised')
-    ) %>% 
+      .cols = where(is.numeric),
+      # find the absolute sd of each of the variable columns
+      .fns = ~ median(.x, na.rm = T)
+    )) %>%
+  pivot_longer(
+    cols = -year, 
+    names_to = 'metric', 
+    values_to = 'year_median')
+
+mean_ad_df = df %>%
+  # take the mean value
+  dplyr::filter(value_type == 'time_series_value') %>%
+  dplyr::select(-value_type) %>%
+  # remove duplications from value_types
+  dplyr::distinct() %>%
+  dplyr::group_by(year) %>%
+  # find standard deviation for each firm 
+  dplyr::summarise(
+    across(
+      .cols = where(is.numeric),
+      # find the absolute sd of each of the variable columns
+      .fns = ~ DescTools::MeanAD(.x, na.rm = T)
+    )) %>%
+  pivot_longer(
+    cols = -year, 
+    names_to = 'metric', 
+    values_to = 'year_mean_ad')
+
+
+#https://www.ibm.com/docs/en/cognos-analytics/11.1.0?topic=terms-modified-z-score
+modified_z_df = df %>%
+  # take the mean value
+  dplyr::filter(value_type == 'time_series_value') %>%
+  tidyr::pivot_longer(
+    cols = -c('year', 'firm', 'value_type'), 
+    names_to = 'metric') %>%
+  dplyr::left_join(
+    median_ad_df,
+    by = c('year', 'metric')
+  ) %>%
+  dplyr::left_join(
+    mean_ad_df,
+    by = c('year', 'metric')
+  ) %>%
+  dplyr::left_join(
+    median_df,
+    by = c('year', 'metric')
+  ) %>%
+  dplyr::mutate(
+    modifed_z = ifelse(year_median_ad == 0, 
+                       (value - year_median)/(1.253314 * year_mean_ad),
+                       (value - year_median)/(1.486 * year_median_ad))
+  ) %>%
+  dplyr::select(firm, year, metric, modifed_z) %>%
+  tidyr::pivot_wider(
+    names_from = 'metric', 
+    values_from = 'modifed_z') %>%
+  dplyr::group_by(firm) %>%
+  dplyr::summarise(
+    across(.cols = where(is.numeric),
+           .fns = ~mean(.x, na.rm = T))
+  ) %>% 
   rowwise() %>%
   # have used select variables to determine size 
-  dplyr::mutate(size_score = mean(c(nwp_m_abs_sd_normalised, net_bel_m_abs_sd_normalised, pure_gross_claims_ratio_abs_sd_normalised), na.rm= T)) %>%
+  dplyr::mutate(size_score = mean(c(nwp_m, net_bel_m, pure_gross_claims_ratio), na.rm= T)) %>%
   dplyr::arrange(desc(size_score)) %>%
   utils::head(10) %>%
-  dplyr::select(firm, size_score, nwp_m_abs_sd_normalised, net_bel_m_abs_sd_normalised, pure_gross_claims_ratio_abs_sd_normalised)
+  dplyr::select(firm, size_score, nwp_m, net_bel_m, pure_gross_claims_ratio)
 
 # pretty table output
-knitr::kable(size_table_df)  %>%
+knitr::kable(modified_z_df)  %>%
   kable_styling("striped", full_width = F) %>% 
   scroll_box(width = "100%")
 
 ```
 
-I have created a table here that provides a potential list of the top 10 firms **using only firms that reported on the general template also**. I have calculated this by taking the *mean normalised absolute standard deviation of the median value* for each firm on specific metrics. To explain this, I first take the median, because mean is more affected by outliers, value of each metric for each firm and then find the absolute standard deviation against the metric. This allows me to find the firms that are, on average, far above the population for each metric. As the distributions vary for each of the metrics I then normalise each of this scores so that when I take the mean there is no weighting bias. I chose the variable *Net Weighted Premium*, *Net BEL (inc. TPs as a whole, pre-TMTP)* and *Pure Gross Claims Ratio* because as you can see from my correlation matrix above, these three variables explain a lot of the variance of the entire dataset and I felt they were therefore wide ranging and mutually exclusive enough to consider all aspects of the business. It is worth noting as you can see from my outputs there is an issue of possible outliers that I will consider and explore later.
+I have created a table here that provides a potential list of the top 10 firms. I have calculated this by taking the *mean modified z score* for *Net Weighted Premium*, *Net BEL (inc. TPs as a whole, pre-TMTP)* and *Pure Gross Claims Ratio*. Firstly, I chose to use the modified z-score (you can find more [here](https://www.ibm.com/docs/en/cognos-analytics/11.1.0?topic=terms-modified-z-score)) as it is more robust to extreme outliers than the standard z score and it gives us a good idea on the position of the metrics for each firm when compared to the populatin. I chose those three variables because collectively these are the three variables that are highly positively correlated with every variable in the dataset and so roughly they will contain the information of the dataset. As yiou can see this needs to be read with some sceptiscm still as there are major outliers that disrupt the results, for example Firm 188's *Pure Gross Claims Ratio* value.
 
 ## Changing Business Profiles
 
@@ -372,14 +445,6 @@ top3 = rasd_metrics_df %>%
   dplyr::slice_max(rasd, n = 3) %>%
   dplyr::mutate(text = name) %>%
   dplyr::select(-rasd)
-
-# produce color vectors for the top three firms
-# this gives the colour values of the vector
-# cols = c(ggthemes::wsj_pal()(length(unique(top3$name))), 
-#          rep('black', (length(unique(rsd_metrics_df$name)) - length(unique(top3$name)))))
-# 
-# # by then naming the vector we can set the color
-# names(cols) = c(unique(top3$name), unique(rsd_metrics_df$name)[!unique(rsd_metrics_df$name) %in% unique(top3$name)])
 
 ggplot(
   rasd_metrics_df %>%
@@ -414,14 +479,15 @@ ggplot(
 
 ```
 
-This chart shows us that RSD is varies across metrics over time and that there are multiple metrics with high variance however there are six main metrics that have a high relative standard deviation all of which are ratios these are: *gross_expense_ratio*, *net_expense_ratio*, *gross_combined_ratio*, *net_combined_ratio*, *pure_gross_claims_ratio*, and *pure_net_claims_ratio*. Although there are 6 they are 3 highly correlated net and gross pairs. There are also strong relationships by definition. *net_combined_ratio* is $\frac{Sum of net claims and expenses incurred}{Net Earned Premium}$ while *net_expense_ratio* is just the expenses part of the equation suggesting this could be an expenses variance. We also see a massive spike in 2016 for RSD in *gross_expense_ratio* which I would suspect is misreporting especially given no spike in *net_expense_ratio* and I will explore later. I will look into the firms that have produced these high variations in the net variables as these will likely explain the variations in the gross variables also.
+This chart shows us that *Relative Absolute Standard Deviation* (RASD) varies across metrics over time and that there are multiple metrics with high variance however there are six main metrics that have a high relative standard deviation all of which are ratios these are: *gross_expense_ratio*, *net_expense_ratio*, *gross_combined_ratio*, *net_combined_ratio*, *pure_gross_claims_ratio*, and *pure_net_claims_ratio*. Although there are 6 they are 3 highly correlated net and gross pairs. There are also strong relationships by definition. *net_combined_ratio* is $\frac{Sum of net claims and expenses incurred}{Net Earned Premium}$ while *net_expense_ratio* is just the expenses part of the equation suggesting this could be an expenses variance. We also see a massive spike in 2016 for RSD in *gross_expense_ratio* which I would suspect is misreporting especially given no spike in *net_expense_ratio* and I will explore later. I will look into the firms that have produced these high variations in the net variables as these will likely explain the variations in the gross variables also.
 
 ```{r Net Expense Ratio pre-filter, echo =FALSE}
 
 plot_metric_by_top_n_type(df = df, metric = 'net_expense_ratio', type = 'sd_value', n = 5)
 
 ```
-We can see from this graph that *net_expense_ratio* spikes has potentially come from these two enormous values that have been reported. I will add a filter to this chart and the other ratio charts to have median values between 0 and 0.87 (this is the range set by 3Q + 1.5 * IQR). I will be consistent in flagging and filtering outliers in this way.
+
+We can see from this graph that *net_expense_ratio* spikes has potentially come from these two enormous values that have been reported. I will add a filter to this chart and the other ratio charts to have median values between 0 and 0.87 (this is the range set by 3Q + 1.5 * IQR). **I will be consistent in flagging and filtering outliers in this way.**
 
 ```{r Net Expense Ratio post-filter, echo =FALSE}
 
@@ -456,15 +522,9 @@ plot_metric_by_top_n_type(df = df %>%
                           n = 5)
 
 ```
+
 After filtering out misreporting firms, we can see the five firms whose data has changed most substantially over the period 2016-20. This is important for supervisors to be aware of because its ability to damage investors confidence in the firm as well as conduct any reasonable long-term financial planning.
 
-
-```{r Net Combined Ratio pre-filter, echo =FALSE}
-
-plot_metric_by_top_n_type(df = df, metric = 'net_combined_ratio', type = 'sd_value', n = 5)
-
-```
-As Firm 418 has misreported both *net_combined_ratio* and *net_expense_ratio*, we can assume the issue is in a misreporting of their expenses which has had a knock-on impact on multiple of their larger KPIs.
 
 ```{r Net Combined Ratio post-filter, echo =FALSE}
 
@@ -477,7 +537,8 @@ plot_metric_by_top_n_type(df = df %>%
                           n = 5)
 
 ```
-Again, once these are removed we can see that multiple firms with volatile ratios. Firms 287, 291 and 417 having both a volatile and high *net combined ratio* would be cause for concern for supervisors.
+
+As *Net Combined Ratio* indicates profitability of a firm this is a very important metric and we can see that multiple firms with volatile ratios. Firms 287, 291 and 417 being in the top 5 most volatile (highest standard deviations) and high *net combined ratio* (above 1.5) would be a large cause for concern for supervisors as this suggests they are very unprofitable and it is very difficult to forecast their future profitability.
 
 ```{r Net Pure Claims Ratio, echo =FALSE}
 
@@ -491,7 +552,7 @@ plot_metric_by_top_n_type(df = df %>%
 
 ```
 
-This is calculated as $\frac{Net Claims}{Net Earned Premium}$ and so a firm like 38 who has managed to reduce this from a poor position is a positive and something that would stop concern from supervisors.
+This is calculated as $\frac{Net Claims}{Net Earned Premium}$ and so a firm like 38 and 253 who has managed to reduce this from a poor position is a positive and something that would stop concern from supervisors. 60, 142, and 306 are concerning for the same reasons as previously mentioned, high variance and currently very high proportionate costs.
 
 ## Outliers and Misreporting
 
@@ -645,7 +706,7 @@ df %>%
 
 ```
 
-If we graph that we can see this:
+If we graph that, we can see how this flagging approach works in practice:
 
 ```{r Outlier Firm 139 chart example, echo = FALSE}
 
@@ -709,9 +770,9 @@ plot_outlier_firm_vs_average(df = df, example_firm = 'Firm 222', metric = 'nwp_m
 
 ```
 
-So this method allows us to look at each firm's submission against the rest of the population and detect whether we consider it an outlier or not. In this case we can safely assume the IQR Outlier will require a resubmission.
+So this method allows us to look at each firm's submission against the rest of the population and detect whether we consider it an outlier or not. In this case we can safely assume the IQR Outlier will require a resubmission. To make this approach more effective I would look to include the confidence intervals on the graph to show when flags are going to be included.
 
-For the machine learning calculations, I am going to remove all IQR outliers to stop poor data quality impoacting the outputs.
+For the machine learning calculations, I am going to remove all IQR outliers to stop poor data quality impacting the outputs.
 
 ```{r filter out Outliers, echo = TRUE}
 
@@ -742,7 +803,8 @@ filtered_df = dplyr::anti_join(
   stats::na.omit()
 
  kable(head(filtered_df)) %>%
-  kable_styling("striped", full_width = F)
+  kable_styling("striped", full_width = F) %>% 
+  scroll_box(width = "100%")
 
 ```
 
@@ -774,7 +836,8 @@ pca_prep = recipes::prep(x = pca_recipe, training = filtered_df)
 pca_output_df = recipes::bake(object = pca_prep, filtered_df)
 
  kable(head(pca_output_df)) %>%
-  kable_styling("striped", full_width = F)
+  kable_styling("striped", full_width = F) %>% 
+  scroll_box(width = "100%")
 
 ```
 
@@ -922,11 +985,12 @@ What this can allow us to do is
 
 ggplot(clusterings, aes(k, tot.withinss)) +
   geom_line() +
+  geom_text(mapping = aes(label = round(tot.withinss, 1)), nudge_y = 50) +
   geom_point(color = ggthemes::wsj_pal()(1)) +
   labs(
     title = 'Total Within Sum of Squares by K Value', 
     y = 'Total WSS', 
-    x = '# of Groups')
+    x = 'K')
 
 ```
 
@@ -934,8 +998,10 @@ There isn't an obvious 'elbow' here so there is no obvious optimal K value for g
 
 ## Application of Cloud Technologies
 
-Once we have the capability to utilise cloud technologies, this project will receive multiple benefits from integrating such tools. Utilising *Azure Data Factory*, a hybrid data integration platform, will allow for smarter data pipelines and a singular connection for databases throghout the Bank. By having a central environment where one can access all data sources and all data submissions flow through we reduce the issues of siloing as all parties are aware of all data sources (even if access isn't immediately available due to security reasons). Currently, the Bank's data environment is such that
+Once we can employ cloud technologies, this project will receive multiple advantages from integrating such tools. Utilising platforms such as *Azure Data Factory*, which is focused on hybrid data integration, will allow for reduced siloing of data, more effective data ingestion, smarter data pipelines and a cost-effective approach to daily batch processing. 
 
+By having a central environment where one can see all databases, like *Azure Data Explorer*, we reduce the issues of siloing. This enables parties to be more aware of all data the Bank collects, even if access isn't immediately available due to security reasons. This will improve collaboration across directorships as teams find overlaps in certain workflows and will reduce duplication of data collection. This is important for my report as firstly, it grants a wider readership and benefits more parties. Secondly, it stops duplication from other colleagues due to its visibility and lastly can be considered a golden source as there is no secondary data source coming in and so can promote collaboration across the Bank.
 
+Azure Data Factory will also allow stronger data quality assurance processes as data ingestion will go through this system and outliers or misreported data are more likely to be flagged meaning that my published report can be trusted. 
 
-
+For daily batch processing, the data is ingested and checked by Azure Data Factory. This is then loaded using custom ELT pipelines into the report hosted on a cloud platform that is scheduled to update every morning. We can then monitor this process and identify any issues that we may need to resolve. Overall, hosting the report on a cloud server reduces the requirement for manual processes from myself or other colleagues allowing us to focus on new projects and targets thus increasing productivity. As we have outsourced ingestion and server services, we can save costs and have increased confidence that the servers and databases will be consistently available without outages or issues that arise from internal key-person risks.
