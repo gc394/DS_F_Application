@@ -101,7 +101,7 @@ thresholds_df = list(
       across(
         .cols = where(is.numeric),
         # find the % change
-        .fns = ~ quantile(.x, 0.9, na.rm = T)
+        .fns = ~ quantile(.x, 0.8, na.rm = T)
       )
     ) %>%
     tidyr::pivot_longer(
@@ -117,7 +117,7 @@ thresholds_df = list(
       across(
         .cols = where(is.numeric),
         # find the % change
-        .fns = ~ quantile(.x, 0.1, na.rm = T)
+        .fns = ~ quantile(.x, 0.2, na.rm = T)
       )
     ) %>%
     tidyr::pivot_longer(
@@ -131,13 +131,48 @@ thresholds_df = list(
     by = c('year', 'metric'))
 
 
+outliers_df = df %>%
+  dplyr::filter(value_type == 'time_series_value')%>%
+  tidyr::pivot_longer(
+    cols = -c('year', 'firm', 'value_type'),
+    names_to = 'metric',
+    values_to = 'value'
+  ) %>%
+  dplyr::left_join(
+    thresholds_df,
+    by = c('year', 'metric')
+  ) %>%
+  dplyr::mutate(
+    flag = case_when(
+      value > iqr_ut | value < iqr_lt ~ 'IQR Outlier',
+      value > d_ut | value < d_lt ~ 'Decile Outlier',
+      .default = 'No Flag'
+    )
+  ) %>%
+  dplyr::select(firm, year, metric, flag) %>%
+  tidyr::pivot_wider(
+    names_from = 'metric',
+    values_from = 'flag'
+  )
 
-
-
-
-
-
-
+filtered_df = anti_join(
+  x = df %>%
+    filter(value_type == 'time_series_value') %>%
+    pivot_longer(cols = -c('firm', 'year', 'value_type')),
+  y = outliers_df %>%
+    pivot_longer(cols = -c('firm', 'year')) %>%
+    filter(value == 'IQR Outlier'),
+  by = c('firm', 'year')
+  ) %>%
+  # we are going to describe the whole time series so just need firm and metric
+  dplyr::group_by(firm, name) %>%
+  dplyr::summarise(
+    # this are the variables I will use (for now)
+    median_value = median(value, na.rm = T),
+    # mad_value = mad(value, na.rm = T)
+  )
+  
+  
 
 
 

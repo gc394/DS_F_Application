@@ -172,6 +172,46 @@ ts= df %>%
 
 
 
+flag_vec = c('IQR Outlier', 'Decile Outlier', 'No Flag')
+cols = ggthemes::wsj_pal()(3)
+names(cols) = flag_vec
+         
+ggplot(data = outliers %>%
+         tidyr::pivot_longer(
+           cols = -c('firm', 'year'),
+           names_to = 'metric',
+           values_to = 'flag') %>%
+         dplyr::mutate(
+           flag = factor(flag, levels = flag_vec),
+           metric = gsub(pattern = '_outlier_flag', replacement = '', metric)
+           ) %>%
+         dplyr::group_by(metric, flag) %>%
+         dplyr::summarise(count = n()),
+       mapping = aes(
+         x = fct_reorder(metric, count, .desc = T),
+         y = count,
+         fill = flag)) +
+  geom_col(position = 'stack') + 
+  scale_fill_manual(
+    values = cols
+  ) +
+  scale_x_discrete(guide = guide_axis(angle = 60)) +
+  theme(axis.title.x = element_text()) + 
+  labs(
+    title = 'Decomposition of Metric by Flag', 
+    subtitle = 'By count', 
+    y = '', 
+    x = '')
+
+
+
+df %>%
+  dplyr::filter(firm != 'Firm 12', value_type == 'time_series_value') %>%
+  dplyr::group_by(year) %>%
+  dplyr::summarise(eof_for_scr_m = median(eof_for_scr_m, na.rm = T),
+                   text = '',
+                   firm = 'Agg')
+
 
 
 

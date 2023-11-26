@@ -28,6 +28,7 @@ library(scales)
 library(ggrepel)
 library(corrplot)
 library(forcats)
+library(tidymodels)
 
 ```
 
@@ -184,8 +185,10 @@ corr_mat = df %>%
   dplyr::distinct() %>%
   stats::cor(., method = "pearson", use = "complete.obs")
 
-corrplot(corr_mat, type = "upper", order = "hclust", 
-         tl.col = "black", tl.srt = 45)
+corrplot(corr_mat, type = "upper", 
+         order = "hclust", 
+         tl.col = "black", 
+         tl.srt = 45)
 
 ```
 
@@ -630,64 +633,309 @@ ggplot(data = outliers_df %>%
 
 We can see there is fair homogeneity in submissions and there is no systemic reporting issues towards any particular metric.
 
-This approach will allow users to do is to flagged submissions quickly, if we take Firm 139's *scr_m* submissions we can see that they have a range of flags throughout the series.
+This approach will allow users to do is to flagged submissions quickly, if we take Firm 139's *scr_m* and Firm 222's *nwp_m* submissions we can see that they have a range of flags throughout the series.
 
-```{r Outlier Firm 12 table example, echo = FALSE}
+```{r Outlier Firms table example, echo = FALSE}
 
 df %>%
-  dplyr::filter(firm == 'Firm 139', value_type == 'time_series_value') %>%
-  dplyr::select(firm, year, scr_m) %>%
+  dplyr::filter(firm %in% c('Firm 139', 'Firm 222'), value_type == 'time_series_value') %>%
+  dplyr::select(firm, year, scr_m, nwp_m) %>%
   knitr::kable() %>%
   kable_styling("striped", full_width = F)
 
 ```
+
 If we graph that we can see this:
+
 ```{r Outlier Firm 139 chart example, echo = FALSE}
 
-firm12_versus_average_df = rbind(
-df %>%
-  dplyr::filter(firm == 'Firm 139', value_type == 'time_series_value') %>%
-  dplyr::select(firm, year, scr_m) %>%
-  dplyr::mutate(text = outliers_df[outliers_df$firm == 'Firm 139',]$scr_m),
-df %>%
-    dplyr::filter(firm != 'Firm 139', value_type == 'time_series_value') %>%
-    dplyr::group_by(year) %>%
-    dplyr::summarise(scr_m = median(scr_m, na.rm = T),
-                     text = '',
-                     firm = 'Agg')
-)
-
-# graph
-ggplot2::ggplot(
-  data = firm12_versus_average_df,
-  mapping = aes(
-    x = year, 
-    y = scr_m, 
-    group = firm,
-    color = firm,
-    label = text)
-)  +
-  geom_line() + 
-  # creates labels that don't bump into each other
-  geom_text(nudge_y = 0.6, nudge_x = -0.08, color = 'black') + 
-  # sets colors on for topn firms
-  scale_color_manual(
-    values = c('Firm 139' = ggthemes::wsj_pal()(1),
-               'Agg' = ggthemes::wsj_pal()(2)[2]), 
-    name = 'Submission'
-  ) +
-  scale_y_continuous(#scales::label_number_auto()
-    labels = scales::label_number_auto()) + 
-  labs(
-    title = glue::glue('Firm 139 submission scr_m time series'),
-    subtitle = glue::glue('With respective outlier flags'),
-    x = 'Year End',
-    y = 'Ratio'
+plot_outlier_firm_vs_average = function(df, example_firm, metric){
+  
+  firm_versus_average_df = rbind(
+  df %>%
+    dplyr::filter(firm == example_firm, value_type == 'time_series_value') %>%
+    dplyr::select(all_of(c('firm', 'year', metric))) %>% 
+    stats::setNames(c("firm","year", 'value'))  %>%
+    dplyr::mutate(text = outliers_df[outliers_df$firm == example_firm,][[metric]]),
+  df %>%
+      dplyr::filter(firm != example_firm, value_type == 'time_series_value') %>%
+      dplyr::group_by(year) %>%
+      dplyr::summarise(value = median(.data[[metric]], na.rm = T),
+                       text = '',
+                       firm = 'Agg')
+  )
+  
+  cols = c(ggthemes::wsj_pal()(1),
+           ggthemes::wsj_pal()(2)[2]) %>%
+    set_names(example_firm, 'Agg')
+  
+  # graph
+  ggplot2::ggplot(
+    data = firm_versus_average_df,
+    mapping = aes(
+      x = year, 
+      y = value, 
+      group = firm,
+      color = firm,
+      label = text)
+  )  +
+    geom_line() + 
+    # creates labels that don't bump into each other
+    geom_text(nudge_y = 0.6, nudge_x = -0.08, color = 'black') + 
+    # sets colors on for topn firms
+    scale_color_manual(
+      values = cols, 
+      name = 'Submission'
+    ) +
+    scale_y_continuous(#scales::label_number_auto()
+      labels = scales::label_number_auto()) + 
+    labs(
+      title = glue::glue('{example_firm} submission {metric} time series'),
+      subtitle = glue::glue('With respective outlier flags'),
+      x = 'Year End',
+      y = 'GBP (M)'
     )
+  
+}
+
+plot_outlier_firm_vs_average(df = df, example_firm = 'Firm 139', metric = 'scr_m')
+
 ```
+
+```{r Outlier Firm 222 chart, echo = FALSE}
+
+plot_outlier_firm_vs_average(df = df, example_firm = 'Firm 222', metric = 'nwp_m')
+
+
+```
+
 So this method allows us to look at each firm's submission against the rest of the population and detect whether we consider it an outlier or not. In this case we can safely assume the IQR Outlier will require a resubmission.
+
+For the machine learning calculations, I am going to remove all IQR outliers to stop poor data quality impoacting the outputs.
+
+```{r filter out Outliers, echo = TRUE}
+
+filtered_df = dplyr::anti_join(
+  x = df %>%
+    filter(value_type == 'time_series_value') %>%
+    pivot_longer(cols = -c('firm', 'year', 'value_type')),
+  y = outliers_df %>%
+    pivot_longer(cols = -c('firm', 'year')) %>%
+    filter(value == 'IQR Outlier'),
+  # remove any that match firm , year and name
+  by = c('firm', 'year', 'name')
+  ) %>%
+  # we are going to describe the whole time series so just need firm and metric
+  dplyr::group_by(firm, name) %>%
+  dplyr::summarise(
+    # this are the variables I will use (for now)
+    median_value = median(value, na.rm = T),
+    # mad_value = mad(value, na.rm = T)
+  ) %>% 
+  dplyr::filter(
+    !is.na(median_value)
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = name, 
+    values_from = median_value) %>%
+  # remove any rows with NAs - this will reduce the dataset but will lead to cleaner results
+  stats::na.omit()
+
+ kable(head(filtered_df)) %>%
+  kable_styling("striped", full_width = F)
+
+```
+
 
 ## Machine Learning Application
 
-One of the strengths of the PRA's supervisory infrastructure is that we are able to categorise firms based on their size, business model, area of operation etc. Each of these characteristics require their own supervisory approaches which the PRA can adapt to and enables more effective regulation. For my machine learning application I will look to cluster the banks into various distinct categories so that we can better define them and our appraoch to them.
+One of the strengths of the PRA's supervisory infrastructure is that we are able to categorise firms based on their size, business model, area of operation etc. Each of these characteristics require their own supervisory approaches which the PRA can adapt to and enables more effective regulation. For my machine learning application I will look to cluster the banks into various distinct categories using principal component analysis so that we can better define them and our approach to them. I have chosen this cleaning approach before clustering because as a dimension reduction process it can help to extract the most important elements of each of the features and reduce the dataset into a more comprehensible size. With the multicolinearity problems that are shown at the start, this approach will mitigate this issue and improve cluster quality.  With *tidymodels* we can easily create a pipeline from input to PCA output
+
+
+```{r PCA Pipeline, warning = FALSE}
+
+pca_recipe <- recipes::recipe(firm ~ ., data = filtered_df)  %>%
+  # step_naomit(all_numeric()) %>%
+  # we only want to sue complete columns
+  recipes::step_filter_missing(
+    all_numeric(),
+    threshold = 0) %>%
+  # normalise all columns
+  recipes::step_normalize(all_numeric()) %>%
+  # compute principal components
+  recipes::step_pca(
+    all_numeric(), 
+    threshold = .95
+    )
+
+pca_prep = recipes::prep(x = pca_recipe, training = filtered_df)
+
+# plot this and cluster
+pca_output_df = recipes::bake(object = pca_prep, filtered_df)
+
+ kable(head(pca_output_df)) %>%
+  kable_styling("striped", full_width = F)
+
+```
+
+```{r PCA Explained Variance chart, echo = FALSE}
+
+as.data.frame(summary(pca_prep$steps[[3]]$res)$importance) %>%
+  knitr::kable() %>%
+  kable_styling("striped", full_width = F)
+
+```
+
+
+This provides us with 14 principal components that explain over 95% of the total variance of the dataset. This suggests that there is little explanatory power in this method however I will still investigate merits.
+
+```{r, PCA Variance Chart, echo = FALSE}
+
+pc_importance_df = as.data.frame(summary(pca_prep$steps[[3]]$res)$importance) %>%
+  dplyr::filter(row.names(.) %in% c('Cumulative Proportion', 'Proportion of Variance')) %>%
+  dplyr::mutate(Variance = case_when(
+    row.names(.) == 'Cumulative Proportion' ~ 'Cumulative',
+    row.names(.) == 'Proportion of Variance' ~ 'Individual'
+  )) %>%
+  tidyr::pivot_longer(
+    cols = -'Variance', 
+    names_to = 'PC'
+  ) %>%
+  tidyr::pivot_wider(
+    id_cols = 'PC', 
+    names_from = 'Variance', 
+    values_from = 'value'
+  ) %>%
+  dplyr::mutate(PC = factor(PC, levels = glue::glue('PC{1:length(PC)}')))
+  
+ggplot(pc_importance_df)  + 
+  geom_line(aes(x=PC, y=Cumulative, group = 1), linewidth=0.5)+
+  geom_point(aes(x=PC, y=Cumulative, color="Cumulative"), pch =16)+
+  geom_col(aes(x=PC, y=Individual, fill="Individual"), colour="black") +
+  geom_hline(yintercept = 0.95, linetype="dashed", color = ggthemes::wsj_pal()(3)[3]) + 
+  geom_text(label = '0.95',mapping = aes(x = 'PC9', y = 0.87), vjust=-1, color = ggthemes::wsj_pal()(3)[3]) +
+  labs(
+    title = 'Explained Variance', 
+    subtitle = 'By Principal Component', 
+    x = 'Principal Components', 
+    y = 'Variance') +
+  scale_color_manual(name ='', values=ggthemes::wsj_pal()(1)) +
+  scale_fill_manual(name ='', values=ggthemes::wsj_pal()(2)[2]) +
+  theme(legend.position="right")
+
+```
+
+I am now going to plot PC1 against PC2 to see if there are obvious clusters before performing k-means clustering.
+
+```{r PC1 vs P2 Chart, echo = FALSE}
+
+ggplot2::ggplot(
+  data = pca_output_df, 
+  mapping = aes(
+    x = PC01, 
+    y = PC02,
+    col = ggthemes::wsj_pal()(1))) +
+  geom_point() + 
+  geom_bin2d(bins = 5, alpha = 0.4) +
+  theme(legend.position = "none") +
+  labs(
+    title = 'Principal Component 1 against 2', 
+    x = 'Principal Component 1', 
+    y = 'Principal Component 2') 
+
+```
+
+There are few discernible groups using just PCs 1 and 2 alongside *ggplot2*'s *geom_bin2d* function to highlight clusters. I will use k-means clustering, an unsupervised ML technique used to group these points together minimising within-cluster variance and it is an incredibly efficient and explainable algorithm. The latter point is important when sharing findings with non-technical colleagues.
+
+```{r PCA 1&2 Loadings, echo = FALSE}
+
+tidy(pca_prep, 3) %>%
+  filter(component %in% paste0("PC", 1:2)) %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(value, terms, fill = terms)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~component, nrow = 1) +
+  labs(
+    title = 'Principal Component Loadings',
+    subtitle = 'For PCs 1 and 2',
+    y = 'Metrics',
+    x = 'Loading value') 
+
+```
+
+What this shows us is the loadings of each of the PCs, we can see that PC1 is largely influenced by multiple of the metrics and PC2, the rest. As we expect, in cases where there is high *pure_net_claims_ratio* there will also be a high *pure_gross_claims_ratio* which matches our earlier charts. These two PC loadings agree with what we saw in the correlation matrix where there are examples of strong positive multicolinearity but no strong negative multicolinearity or indeeed just colinearity.
+
+```{r K-Means Clustering, echo = F}
+
+pca_points = pca_output_df %>% 
+  dplyr::select(-firm)
+
+kclusts <- 
+  tibble(k = 3:8)  %>%
+  mutate(
+    kclust = map(k, ~kmeans(pca_points, .x)),
+    tidied = map(kclust, tidy),
+    glanced = map(kclust, glance),
+    augmented = map(kclust, augment, pca_points)
+    )
+
+# provide the cluster positions of each group
+clusters <- 
+  kclusts %>%
+  unnest(cols = c(tidied))
+
+# provide the group ownership of each firm
+assignments <- 
+  kclusts %>% 
+  unnest(cols = c(augmented))
+
+# clustering and their evaluation metric
+clusterings <- 
+  kclusts %>%
+  unnest(cols = c(glanced))
+
+ggplot(assignments, 
+  aes(
+    x = PC01, 
+    y = PC02)) +
+  geom_point(
+    aes(
+      color = .cluster), 
+    alpha = 0.8) + 
+  geom_point(
+    data = clusters, 
+    size = 8, 
+    shape = "x") + 
+  facet_wrap(~ k) +
+  labs(
+    title = 'PCA Clusters', 
+    subtitle = 'By different K values', 
+    x = 'Principal Component 1', 
+    y = 'Principal Component 2',
+    color = 'Cluster Group')
+
+```
+
+What this can allow us to do is 
+
+```{r Total Withinss, echo = FALSE}
+
+ggplot(clusterings, aes(k, tot.withinss)) +
+  geom_line() +
+  geom_point(color = ggthemes::wsj_pal()(1)) +
+  labs(
+    title = 'Total Within Sum of Squares by K Value', 
+    y = 'Total WSS', 
+    x = '# of Groups')
+
+```
+
+There isn't an obvious 'elbow' here so there is no obvious optimal K value for grouping these columns. In order for PCA to be successful in either inference or prediction the data will need a more effective clean to allow for the algorithms to be successful.
+
+## Application of Cloud Technologies
+
+Once we have the capability to utilise cloud technologies, this project will receive multiple benefits from integrating such tools. Utilising *Azure Data Factory*, a hybrid data integration platform, will allow for smarter data pipelines and a singular connection for databases throghout the Bank. By having a central environment where one can access all data sources and all data submissions flow through we reduce the issues of siloing as all parties are aware of all data sources (even if access isn't immediately available due to security reasons). Currently, the Bank's data environment is such that
+
+
+
 
