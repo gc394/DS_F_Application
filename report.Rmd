@@ -151,7 +151,7 @@ I have set up the datatable so that only *value_type* *time_series_value* varies
 
 ## Caveats
 
-```{r Missing Firms, eval=FALSE}
+```{r Missing Firms, echo=FALSE, include = F}
 
 pull_unique_firms = function(wb, sheet_n){
   
@@ -867,7 +867,8 @@ pca_output_df = recipes::bake(object = pca_prep, filtered_df)
 
 as.data.frame(summary(pca_prep$steps[[3]]$res)$importance) %>%
   knitr::kable() %>%
-  kable_styling("striped", full_width = F)
+  kable_styling("striped", full_width = F)%>% 
+  scroll_box(width = "100%")
 
 ```
 
