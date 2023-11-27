@@ -33,7 +33,7 @@ library(plyr)
 
 ```
 
-In this report I will look to highlight the firms that should be focused on by our supervisors using key metrics that I will explain throughout the report. I will keep all my code in the report for audit and reusability purposes as conclusions may change as new data arrives. I will focus this piece on the three main characteristics stated: Firm Size, Changing Business Profile and Outliers.
+In this report I will look to highlight the firms that should be focused on by our supervisors using key metrics that I will explain throughout the report. I will keep all my code in the report for audit and reusability purposes as conclusions may change as new data arrives. I will focus this piece on the three main characteristics stated: Firm Size, Changing Business Profile and Outliers. After this I will be performing some machine-learning application on the data using *principal component analysis* and *k-means clustering*. I will conclude by writing on the benefits this report would receive from being hosted on a cloud server.
 
 ## Data Loading and Wrangling
 
@@ -146,7 +146,7 @@ knitr::kable(head(df, 5))  %>%
 ```
 
 
-I have set up the datatable so that only *value_type* *time_series_value* varies over time, all the other variables in this column stay consistent. This makes it straightforward to wrangle to find the top/bottom n firms or most/least varying firms by variable as you will see in my visualisation code.
+I have set up the datatable so that only *value_type* *time_series_value* varies over time, all the other variables in this column stay consistent. This makes it straightforward to wrangle to find the top/bottom n firms or most/least varying firms by variable as you will see in my visualization code.
 
 
 ## Caveats
@@ -418,13 +418,13 @@ knitr::kable(modified_z_df)  %>%
 
 ```
 
-I have created a table here that provides a potential list of the top 10 firms. I have calculated this by taking the *mean modified z score* for *Net Weighted Premium*, *Net BEL (inc. TPs as a whole, pre-TMTP)* and *Pure Gross Claims Ratio*. Firstly, I chose to use the modified z-score (you can find more [here](https://www.ibm.com/docs/en/cognos-analytics/11.1.0?topic=terms-modified-z-score)) as it is more robust to extreme outliers than the standard z score and it gives us a good idea on the position of the metrics for each firm when compared to the populatin. I chose those three variables because collectively these are the three variables that are highly positively correlated with every variable in the dataset and so roughly they will contain the information of the dataset. As yiou can see this needs to be read with some sceptiscm still as there are major outliers that disrupt the results, for example Firm 188's *Pure Gross Claims Ratio* value.
+I have created a table here that provides a potential list of the top 10 firms. I have calculated this by taking the *mean modified z score* for *Net Weighted Premium*, *Net BEL (inc. TPs as a whole, pre-TMTP)* and *Pure Gross Claims Ratio*. Firstly, I chose to use the modified z-score (you can find more [here](https://www.ibm.com/docs/en/cognos-analytics/11.1.0?topic=terms-modified-z-score)) as it is more robust to extreme outliers than the standard z score and it gives us a good idea on the position of the metrics for each firm when compared to the population. I chose those three variables because collectively these are the three variables that are highly positively correlated with every variable in the dataset and so roughly they will contain the information of the dataset. As you can see this needs to be read with some scepticism still as there are major outliers that disrupt the results, for example Firm 188's *Pure Gross Claims Ratio* value.
 
 ## Changing Business Profiles Graphs
 
 Volatility of a firm's accounts are of considerable concern to Supervisors and so it's important to investigate. 
 
-I will start with considering variation the metric level. I am going to use *relative standard deviation* as this will allow me to compare SDs across each of the variables effectively.
+I will start with considering variation the metric level. I am going to use *relative standard deviation* as this will allow me to compare standard deviations across each of the variables effectively.
 
 ```{r RSD of Variables, echo = FALSE}
 
@@ -489,7 +489,7 @@ plot_metric_by_top_n_type(df = df, metric = 'net_expense_ratio', type = 'sd_valu
 
 ```
 
-We can see from this graph that *net_expense_ratio* spikes has potentially come from these two enormous values that have been reported. I will add a filter to this chart and the other ratio charts to have median values between 0 and 0.87 (this is the range set by 3Q + 1.5 * IQR). **I will be consistent in flagging and filtering outliers in this way.**
+We can see from this graph that *net_expense_ratio* spikes has potentially come from these two enormous values that have been reported. I will add a filter to this chart and the other ratio charts to have median values between 0 and 0.87 (this is the range set by 3Q + 1.5 * IQR).
 
 ```{r Net Expense Ratio post-filter, echo =FALSE}
 
@@ -792,7 +792,7 @@ plot_outlier_firm_vs_average(df = df, example_firm = 'Firm 116', metric = 'gross
 
 ```
 
-This method allows us to look at each firm's submission against the rest of the population and detect whether we consider it an outlier or not. In this case we can safely assume the IQR Outlier will require a resubmission. Utilising IQR outlier markers shows a clear picture on where an iondividual's firm submissions deviate significantly from the population.
+This method allows us to look at each firm's submission against the rest of the population and detect whether we consider it an outlier or not. In this case we can safely assume the IQR Outlier will require a resubmission. Utilising IQR outlier markers shows a clear picture on where an individual's firm submissions deviate significantly from the population.
 
 For the machine learning calculations, I am going to remove all IQR outliers to stop poor data quality impacting the outputs.
 
@@ -844,7 +844,7 @@ pca_recipe <- recipes::recipe(firm ~ ., data = filtered_df)  %>%
   recipes::step_filter_missing(
     all_numeric(),
     threshold = 0) %>%
-  # normalise all columns
+  # normalize all columns
   recipes::step_normalize(all_numeric()) %>%
   # compute principal components
   recipes::step_pca(
@@ -949,7 +949,7 @@ tidy(pca_prep, 3) %>%
 
 ```
 
-What this shows us is the loadings of each of the PCs, we can see that PC1 is largely influenced by multiple of the metrics and PC2, the rest. As we expect, in cases where there is high *pure_net_claims_ratio* there will also be a high *pure_gross_claims_ratio* which matches our earlier charts. These two PC loadings agree with what we saw in the correlation matrix where there are examples of strong positive multicolinearity but no strong negative multicolinearity or indeeed just colinearity.
+What this shows us is the loadings of each of the PCs, we can see that PC1 is largely influenced by multiple of the metrics and PC2, the rest. As we expect, in cases where there is high *pure_net_claims_ratio* there will also be a high *pure_gross_claims_ratio* which matches our earlier charts. These two PC loadings agree with what we saw in the correlation matrix where there are examples of strong positive multicolinearity but no strong negative multicolinearity or indeed just colinearity.
 
 ```{r K-Means Clustering, echo = F}
 
@@ -1004,7 +1004,7 @@ ggplot(assignments,
 
 K-means clustering is an iterative process that assigns each data point to a group (randomly at first) and are incrementally clustered based on similarities to other points. Firstly, K 'centroids' are positioned randomly and the data points are assigned to closest centroid (based on euclidean distance traditionally). The centroids are then repositioned based on the average position of it's constituents and the process goes again. This process stops when the clusters do not change further.
 
-This chart above shows us how the groups form with different values of K, due to the shape of the population (part due to cleaning outliers and using median values instead of investigating temporally) the groups begin difficult to disentagle when K > 5 when only looking at PCs 1 and 2. 
+This chart above shows us how the groups form with different values of K, due to the shape of the population (part due to cleaning outliers and using median values instead of investigating temporally) the groups begin difficult to disentangle when K > 5 when only looking at PCs 1 and 2. 
 
 ```{r Total Withinss, echo = FALSE}
 
