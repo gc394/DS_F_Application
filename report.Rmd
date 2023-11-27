@@ -29,6 +29,7 @@ library(ggrepel)
 library(corrplot)
 library(forcats)
 library(tidymodels)
+library(plyr)
 
 ```
 
@@ -133,7 +134,7 @@ knitr::kable(summary(df))  %>%
   scroll_box(width = "100%")
 ```
 
-From this summary we can see each of the columns are in the correct data type and there is significant variance across the numeric variables. The dataset looks like this now:
+From this summary we can see each of the columns are in the correct data type and there is significant variance across the numeric variables. Due to the extreme outliers this will influence the statistical metrics I used for my analysis as I will require more variance-robust metrics.The dataset looks like this now:
 
 ```{r, echo = FALSE}
 
@@ -192,8 +193,7 @@ corrplot(corr_mat, type = "upper",
 
 ```
 
-
-## Firm Size
+## Firm Size Plots
 
 To consider firm size I will look at:
 
@@ -308,6 +308,8 @@ plot_metric_by_top_n_type(df = df, metric = 'equity_m', type = 'median_value', n
 
 Firm 4 has appears twice now, firstly for having a significantly larger Net Written Premium and now for Equity. This suggests to us that it is a largely profitable insurance firm with a large equity holding meaning it is in a very healthy financial position. I would suggest this firm is definitely an important player in the market and one to monitor.
 
+## Firm Size Score Table
+
 ```{r Size Table, echo = FALSE}
 
 # modifed z-score
@@ -418,7 +420,7 @@ knitr::kable(modified_z_df)  %>%
 
 I have created a table here that provides a potential list of the top 10 firms. I have calculated this by taking the *mean modified z score* for *Net Weighted Premium*, *Net BEL (inc. TPs as a whole, pre-TMTP)* and *Pure Gross Claims Ratio*. Firstly, I chose to use the modified z-score (you can find more [here](https://www.ibm.com/docs/en/cognos-analytics/11.1.0?topic=terms-modified-z-score)) as it is more robust to extreme outliers than the standard z score and it gives us a good idea on the position of the metrics for each firm when compared to the populatin. I chose those three variables because collectively these are the three variables that are highly positively correlated with every variable in the dataset and so roughly they will contain the information of the dataset. As yiou can see this needs to be read with some sceptiscm still as there are major outliers that disrupt the results, for example Firm 188's *Pure Gross Claims Ratio* value.
 
-## Changing Business Profiles
+## Changing Business Profiles Graphs
 
 Volatility of a firm's accounts are of considerable concern to Supervisors and so it's important to investigate. 
 
@@ -694,25 +696,28 @@ ggplot(data = outliers_df %>%
 
 We can see there is fair homogeneity in submissions and there is no systemic reporting issues towards any particular metric.
 
-This approach will allow users to do is to flagged submissions quickly, if we take Firm 139's *scr_m* and Firm 222's *nwp_m* submissions we can see that they have a range of flags throughout the series.
+This approach will allow users to do is to flagged submissions quickly, if we take Firm 139's *scr_m* and Firm 116's *gross_bel_m* submissions we can see that they have a range of flags throughout the series.
 
 ```{r Outlier Firms table example, echo = FALSE}
-
-df %>%
-  dplyr::filter(firm %in% c('Firm 139', 'Firm 222'), value_type == 'time_series_value') %>%
+outliers_df %>%
+  dplyr::filter(firm %in% c('Firm 139', 'Firm 222')) %>%
   dplyr::select(firm, year, scr_m, nwp_m) %>%
+  dplyr::left_join(
+    df %>%
+      dplyr::filter(firm %in% c('Firm 139', 'Firm 222'), value_type == 'time_series_value') %>%
+      dplyr::select(firm, year, scr_m, nwp_m),
+    by = c('firm', 'year')) %>%
   knitr::kable() %>%
   kable_styling("striped", full_width = F)
-
 ```
 
 If we graph that, we can see how this flagging approach works in practice:
 
-```{r Outlier Firm 139 chart example, echo = FALSE}
+```{r Outlier Firm 139 chart example, echo = FALSE, warning=FALSE}
 
 plot_outlier_firm_vs_average = function(df, example_firm, metric){
   
-  firm_versus_average_df = rbind(
+  firm_versus_average_df = plyr::rbind.fill(
   df %>%
     dplyr::filter(firm == example_firm, value_type == 'time_series_value') %>%
     dplyr::select(all_of(c('firm', 'year', metric))) %>% 
@@ -721,8 +726,9 @@ plot_outlier_firm_vs_average = function(df, example_firm, metric){
   df %>%
       dplyr::filter(firm != example_firm, value_type == 'time_series_value') %>%
       dplyr::group_by(year) %>%
-      dplyr::summarise(value = median(.data[[metric]], na.rm = T),
-                       text = '',
+      dplyr::summarise(median = median(.data[[metric]], na.rm = T),
+                       upper_bound = quantile(.data[[metric]], 0.75, na.rm = T) + (1.5 * IQR(.data[[metric]], na.rm = T)),
+                       lower_bound = quantile(.data[[metric]], 0.25, na.rm = T) - (1.5 * IQR(.data[[metric]], na.rm = T)),
                        firm = 'Agg')
   )
   
@@ -734,15 +740,32 @@ plot_outlier_firm_vs_average = function(df, example_firm, metric){
   ggplot2::ggplot(
     data = firm_versus_average_df,
     mapping = aes(
-      x = year, 
-      y = value, 
+      x = year,
+      label = text,
       group = firm,
-      color = firm,
-      label = text)
-  )  +
-    geom_line() + 
+      color = firm)
+    ) +
+    geom_line(
+      mapping = aes(
+      y = value)
+      ) +
+    geom_line(
+      mapping = aes(
+      y = median)
+      ) +
+    geom_ribbon(
+      mapping = aes(
+        y = median, 
+        ymin = median, 
+        ymax = upper_bound), 
+      alpha = 0.1) +
     # creates labels that don't bump into each other
-    geom_text(nudge_y = 0.6, nudge_x = -0.08, color = 'black') + 
+    geom_text(
+       mapping = aes(
+         y = value),
+       nudge_y = 8, 
+       nudge_x = -0.08, 
+       color = 'black') + 
     # sets colors on for topn firms
     scale_color_manual(
       values = cols, 
@@ -763,14 +786,13 @@ plot_outlier_firm_vs_average(df = df, example_firm = 'Firm 139', metric = 'scr_m
 
 ```
 
-```{r Outlier Firm 222 chart, echo = FALSE}
+```{r Outlier Firm 222 chart, echo = FALSE, warning = FALSE}
 
-plot_outlier_firm_vs_average(df = df, example_firm = 'Firm 222', metric = 'nwp_m')
-
+plot_outlier_firm_vs_average(df = df, example_firm = 'Firm 116', metric = 'gross_bel_m')
 
 ```
 
-So this method allows us to look at each firm's submission against the rest of the population and detect whether we consider it an outlier or not. In this case we can safely assume the IQR Outlier will require a resubmission. To make this approach more effective I would look to include the confidence intervals on the graph to show when flags are going to be included.
+This method allows us to look at each firm's submission against the rest of the population and detect whether we consider it an outlier or not. In this case we can safely assume the IQR Outlier will require a resubmission. Utilising IQR outlier markers shows a clear picture on where an iondividual's firm submissions deviate significantly from the population.
 
 For the machine learning calculations, I am going to remove all IQR outliers to stop poor data quality impacting the outputs.
 
@@ -811,7 +833,7 @@ filtered_df = dplyr::anti_join(
 
 ## Machine Learning Application
 
-One of the strengths of the PRA's supervisory infrastructure is that we are able to categorise firms based on their size, business model, area of operation etc. Each of these characteristics require their own supervisory approaches which the PRA can adapt to and enables more effective regulation. For my machine learning application I will look to cluster the banks into various distinct categories using principal component analysis so that we can better define them and our approach to them. I have chosen this cleaning approach before clustering because as a dimension reduction process it can help to extract the most important elements of each of the features and reduce the dataset into a more comprehensible size. With the multicolinearity problems that are shown at the start, this approach will mitigate this issue and improve cluster quality.  With *tidymodels* we can easily create a pipeline from input to PCA output
+One of the strengths of the PRA's supervisory infrastructure is that we are able to categorise firms based on their size, business model, area of operation etc. Each of these characteristics require their own supervisory approaches which the PRA can adapt to and enables more effective regulation. For my machine learning application I will look to use *K-means clustering* to put the banks into various distinct categories. Firstly I will extract the important data from the features using *principal component analysis* (PCA). PCA can identify the underlying structure of the data, which can make it easier for the clustering algorithm to find the true clusters. I have chosen this cleaning approach before clustering because as a dimension reduction process it can help to extract the most important elements of each of the features and reduce the dataset into a more comprehensible size. With the multicolinearity problems that are shown at the start, this approach will mitigate this issue and improve cluster quality. With *tidymodels* we can easily create a pipeline from input to PCA output
 
 
 ```{r PCA Pipeline, warning = FALSE}
@@ -942,17 +964,17 @@ kclusts <-
     augmented = map(kclust, augment, pca_points)
     )
 
-# provide the cluster positions of each group
+# provide the cluster positions of each group by creating a tidy tibble
 clusters <- 
   kclusts %>%
   unnest(cols = c(tidied))
 
-# provide the group ownership of each firm
+# perform the prediction of the model
 assignments <- 
   kclusts %>% 
   unnest(cols = c(augmented))
 
-# clustering and their evaluation metric
+# farm out the clustering summary measures
 clusterings <- 
   kclusts %>%
   unnest(cols = c(glanced))
@@ -971,7 +993,7 @@ ggplot(assignments,
     shape = "x") + 
   facet_wrap(~ k) +
   labs(
-    title = 'PCA Clusters', 
+    title = 'K-means Clusters from the Principal Components', 
     subtitle = 'By different K values', 
     x = 'Principal Component 1', 
     y = 'Principal Component 2',
@@ -979,7 +1001,9 @@ ggplot(assignments,
 
 ```
 
-What this can allow us to do is 
+K-means clustering is an iterative process that assigns each data point to a group (randomly at first) and are incrementally clustered based on similarities to other points. Firstly, K 'centroids' are positioned randomly and the data points are assigned to closest centroid (based on euclidean distance traditionally). The centroids are then repositioned based on the average position of it's constituents and the process goes again. This process stops when the clusters do not change further.
+
+This chart above shows us how the groups form with different values of K, due to the shape of the population (part due to cleaning outliers and using median values instead of investigating temporally) the groups begin difficult to disentagle when K > 5 when only looking at PCs 1 and 2. 
 
 ```{r Total Withinss, echo = FALSE}
 
@@ -994,7 +1018,9 @@ ggplot(clusterings, aes(k, tot.withinss)) +
 
 ```
 
-There isn't an obvious 'elbow' here so there is no obvious optimal K value for grouping these columns. In order for PCA to be successful in either inference or prediction the data will need a more effective clean to allow for the algorithms to be successful.
+
+
+There is no obvious optimal K value for grouping these columns. As WSS score reduces to a more acceptable level, there are so many groups that any inference is lost. In order for PCA to be successful in either inference or prediction the data will need a more effective clean to allow for the algorithms to be more successful. Due to my cleaning methods the dataset was reduced which diminishes the power of PCA. Nonetheless, we can provide this information to the supervisors to help inform their choice.
 
 ## Application of Cloud Technologies
 
